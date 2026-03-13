@@ -4,19 +4,18 @@ const axios = require('axios');
 const CONFIG = {
   apiKey: '9qj9UqShLM9Fw69oxXLKGAECBVnVOHHXUxI6WN3KLCPVewzZb5lPZKS8HR1yLieP',
   secretKey: 'mHEPUX58PyJ1nMq7PVji3AVF8D1h58mBivENI50Di6xqv79Ecz5eHTs5JoFVblKW',
-  testnet: true, // START WITH TESTNET!
+  testnet: true,
   symbol: 'BTCUSDT',
   leverage: 10,
   // Risk management
-  maxPositionSize: 0.01, // BTC
-  maxLossPerTrade: 2, // % of account
-  dailyLossLimit: 5, // % of account
-  // Trading parameters
+  maxPositionSize: 0.01,
+  maxLossPerTrade: 2,
+  dailyLossLimit: 5,
+  // RSI-only strategy
   rsiPeriod: 14,
-  rsiOverbought: 70,
-  rsiOversold: 30,
-  emaFast: 9,
-  emaSlow: 21
+  rsiOversold: 35,
+  rsiOverbought: 65,
+  rsiExit: 50
 };
 
 const BASE_URL = CONFIG.testnet 
@@ -26,7 +25,6 @@ const BASE_URL = CONFIG.testnet
 // ============== STATE ==============
 let trades = [];
 let dailyLoss = 0;
-let lastTradeTime = 0;
 let position = null;
 
 // ============== HELPERS ==============
@@ -72,18 +70,6 @@ function calculateRSI(prices, period = 14) {
   return 100 - (100 / (1 + rs));
 }
 
-function calculateEMA(prices, period) {
-  if (prices.length < period) return prices[prices.length - 1];
-  
-  const multiplier = 2 / (period + 1);
-  let ema = prices.slice(0, period).reduce((a, b) => a + b) / period;
-  
-  for (let i = period; i < prices.length; i++) {
-    ema = (prices[i] - ema) * multiplier + ema;
-  }
-  return ema;
-}
-
 // ============== TRADING LOGIC ==============
 async function getMarketData() {
   const candles = await apiCall('/fapi/v1/klines', 'GET', {
@@ -98,8 +84,6 @@ async function getMarketData() {
   return {
     price: currentPrice,
     rsi: calculateRSI(closes, CONFIG.rsiPeriod),
-    emaFast: calculateEMA(closes, CONFIG.emaFast),
-    emaSlow: calculateEMA(closes, CONFIG.emaSlow),
     closes
   };
 }
@@ -138,9 +122,10 @@ async function openPosition(side, amount) {
     leverage: CONFIG.leverage
   });
   
-  // Set stop loss
   const entryPrice = parseFloat(order.price);
-  const stopLossPercent = 2; // 2% stop loss
+  
+  // Set stop loss (2%)
+  const stopLossPercent = 2;
   const stopPrice = side === 'LONG' 
     ? entryPrice * (1 - stopLossPercent / 100)
     : entryPrice * (1 + stopLossPercent / 100);
@@ -154,7 +139,7 @@ async function openPosition(side, amount) {
     workingType: 'MARK_PRICE'
   });
   
-  // Set take profit (2:1 risk reward)
+  // Set take profit (4% = 2:1)
   const takeProfitPrice = side === 'LONG'
     ? entryPrice * (1 + stopLossPercent * 2 / 100)
     : entryPrice * (1 - stopLossPercent * 2 / 100);
@@ -199,17 +184,16 @@ async function closePosition(position) {
   if (closedTrade) {
     closedTrade.status = 'CLOSED';
     closedTrade.closeTime = Date.now();
-    closedTrade.exitPrice = position.entryPrice; // Will update with actual
     saveLogs();
   }
   
   return true;
 }
 
-// ============== STRATEGY ==============
+// ============== STRATEGY (RSI-ONLY) ==============
 async function runStrategy() {
   console.log(`\n${'='.repeat(50)}`);
-  console.log(`📊 RUNNING STRATEGY - ${new Date().toLocaleString()}`);
+  console.log(`📊 RUNNING RSI-ONLY STRATEGY - ${new Date().toLocaleString()}`);
   console.log('='.repeat(50));
   
   const market = await getMarketData();
@@ -218,11 +202,10 @@ async function runStrategy() {
   
   console.log(`💰 Balance: ${balance.toFixed(4)} BTC`);
   console.log(`💵 Price: $${market.price.toLocaleString()}`);
-  console.log(`📈 RSI: ${market.rsi.toFixed(2)}`);
-  console.log(`📊 EMA Fast: ${market.emaFast.toFixed(2)} | EMA Slow: ${market.emaSlow.toFixed(2)}`);
+  console.log(`📈 RSI: ${market.rsi.toFixed(2)} (Long < ${CONFIG.rsiOversold}, Short > ${CONFIG.rsiOverbought})`);
   
   if (currentPosition) {
-    console.log(`📍 Current Position: ${currentPosition.side} ${currentPosition.amount} BTC @ $${currentPosition.entryPrice.toLocaleString()}`);
+    console.log(`📍 Position: ${currentPosition.side} ${currentPosition.amount} BTC @ $${currentPosition.entryPrice.toLocaleString()}`);
     console.log(`💸 P&L: $${currentPosition.unrealizedPL.toFixed(2)}`);
   } else {
     console.log(`📍 No open position`);
@@ -230,31 +213,33 @@ async function runStrategy() {
   
   // Trading logic
   if (currentPosition) {
-    // Check if we should close
+    // Check exit conditions
+    const shouldExit = 
+      (currentPosition.side === 'LONG' && market.rsi > CONFIG.rsiExit) ||
+      (currentPosition.side === 'SHORT' && market.rsi < CONFIG.rsiExit);
+    
+    // Check stop loss
     const pnlPercent = (currentPosition.unrealizedPL / (currentPosition.amount * currentPosition.entryPrice)) * 100;
     
     if (Math.abs(pnlPercent) >= CONFIG.maxLossPerTrade) {
       console.log(`⚠️ Stop loss triggered! P&L: ${pnlPercent.toFixed(2)}%`);
       await closePosition(currentPosition);
+    } else if (shouldExit) {
+      console.log(`🎯 RSI exit signal (RSI: ${market.rsi.toFixed(2)} at neutral ${CONFIG.rsiExit})`);
+      await closePosition(currentPosition);
+    } else {
+      console.log(`⏳ Holding position... RSI: ${market.rsi.toFixed(2)}`);
     }
   } else {
-    // Entry signals
-    const rsi = market.rsi;
-    const emaCross = market.emaFast > market.emaSlow;
-    const rsiOversold = rsi < CONFIG.rsiOversold;
-    const rsiOverbought = rsi > CONFIG.rsiOverbought;
-    
-    // Long signal: RSI oversold + EMA bullish
-    if (rsiOversold && emaCross) {
-      console.log(`🟢 LONG SIGNAL DETECTED! RSI: ${rsi.toFixed(2)}`);
+    // Entry signals - RSI only
+    if (market.rsi < CONFIG.rsiOversold) {
+      console.log(`🟢 LONG SIGNAL! RSI: ${market.rsi.toFixed(2)} (below ${CONFIG.rsiOversold})`);
       await openPosition('LONG', CONFIG.maxPositionSize);
-    }
-    // Short signal: RSI overbought + EMA bearish  
-    else if (rsiOverbought && !emaCross) {
-      console.log(`🔴 SHORT SIGNAL DETECTED! RSI: ${rsi.toFixed(2)}`);
+    } else if (market.rsi > CONFIG.rsiOverbought) {
+      console.log(`🔴 SHORT SIGNAL! RSI: ${market.rsi.toFixed(2)} (above ${CONFIG.rsiOverbought})`);
       await openPosition('SHORT', CONFIG.maxPositionSize);
     } else {
-      console.log(`⏳ No signal. Waiting...`);
+      console.log(`⏳ No signal. RSI at ${market.rsi.toFixed(2)} - waiting for ${CONFIG.rsiOversold} or ${CONFIG.rsiOverbought}`);
     }
   }
   
@@ -265,9 +250,7 @@ async function runStrategy() {
 function saveLogs() {
   const log = {
     timestamp: new Date().toISOString(),
-    balance: getBalance(),
-    openPosition: position,
-    trades: trades.slice(-10)
+    trades: trades.slice(-20)
   };
   
   const fs = require('fs');
@@ -276,10 +259,11 @@ function saveLogs() {
 
 // ============== MAIN LOOP ==============
 async function main() {
-  console.log('🤖 TRADING BOT STARTED');
+  console.log('🤖 KNOX TRADING BOT STARTED');
   console.log(`📍 Mode: ${CONFIG.testnet ? 'TESTNET' : 'LIVE'}`);
   console.log(`🪙 Trading: ${CONFIG.symbol}`);
   console.log(`⚖️ Leverage: ${CONFIG.leverage}x`);
+  console.log(`📈 Strategy: RSI-Only (${CONFIG.rsiOversold}/${CONFIG.rsiOverbought})`);
   
   // Set leverage
   await apiCall('/fapi/v1/leverage', 'POST', {
