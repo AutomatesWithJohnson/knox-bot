@@ -1,0 +1,13 @@
+{
+  "name": "knox-trading-bot",
+  "version": "1.0.0",
+  "description": "Automated futures trading bot for Binance",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "test": "echo \"Use testnet first!\""
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
