@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KNOX - Trading Bot Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; }
+    
+    .header { background: linear-gradient(135deg, #f0b90b, #3c3c3c); padding: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: 2px; }
+    .status { display: flex; align-items: center; gap: 8px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #00ff00; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    
+    .container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+    
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: #1a1a1a; border-radius: 12px; padding: 20px; border: 1px solid #333; }
+    .stat-label { color: #888; font-size: 0.85rem; margin-bottom: 8px; }
+    .stat-value { font-size: 1.5rem; font-weight: 700; }
+    .stat-value.green { color: #00ff00; }
+    .stat-value.red { color: #ff0000; }
+    .stat-value.yellow { color: #f0b90b; }
+    
+    .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+    @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+    
+    .card { background: #1a1a1a; border-radius: 12px; padding: 20px; border: 1px solid #333; }
+    .card-title { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: #f0b90b; }
+    
+    .trade-list { max-height: 400px; overflow-y: auto; }
+    .trade-item { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #333; }
+    .trade-item:last-child { border-bottom: none; }
+    .trade-side { font-weight: 600; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; }
+    .trade-side.LONG { background: #00ff00/20; color: #00ff00; }
+    .trade-side.SHORT { background: #ff0000/20; color: #ff0000; }
+    .trade-status { font-size: 0.8rem; padding: 2px 8px; border-radius: 4px; }
+    .trade-status.OPEN { background: #f0b90b/20; color: #f0b90b; }
+    .trade-status.CLOSED { background: #333; color: #888; }
+    
+    .log-viewer { background: #000; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 0.8rem; max-height: 300px; overflow-y: auto; color: #00ff00; }
+    
+    .btn { background: #f0b90b; color: #000; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .btn:hover { background: #d49b0a; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">🟡 KNOX TRADING BOT</div>
+    <div class="status">
+      <div class="status-dot"></div>
+      <span>Running on Testnet</span>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-label">Balance</div>
+        <div class="stat-value yellow" id="balance">-- BTC</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Open Position</div>
+        <div class="stat-value" id="position">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Today's P&L</div>
+        <div class="stat-value" id="pnl">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Trades</div>
+        <div class="stat-value" id="totalTrades">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Win Rate</div>
+        <div class="stat-value green" id="winRate">--%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Current Price</div>
+        <div class="stat-value" id="price">--</div>
+      </div>
+    </div>
+    
+    <div class="main-grid">
+      <div class="card">
+        <div class="card-title">Recent Trades</div>
+        <div class="trade-list" id="tradeList">
+          <div style="color: #666; text-align: center; padding: 40px;">No trades yet</div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-title">Live Logs</div>
+        <div class="log-viewer" id="logs">
+          <div>[SYSTEM] Bot initialized</div>
+          <div>[SYSTEM] Connecting to Binance Testnet...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simulated data for demo
+    const demoTrades = [
+      { side: 'LONG', amount: 0.01, entryPrice: 42500, status: 'OPEN', entryTime: Date.now() - 3600000 },
+      { side: 'SHORT', amount: 0.01, entryPrice: 42100, status: 'CLOSED', entryTime: Date.now() - 7200000, exitPrice: 42350 },
+      { side: 'LONG', amount: 0.01, entryPrice: 41800, status: 'CLOSED', entryTime: Date.now() - 14400000, exitPrice: 42000 },
+    ];
+    
+    function renderTrades(trades) {
+      const list = document.getElementById('tradeList');
+      if (!trades || trades.length === 0) {
+        list.innerHTML = '<div style="color: #666; text-align: center; padding: 40px;">No trades yet</div>';
+        return;
+      }
+      
+      list.innerHTML = trades.map(t => `
+        <div class="trade-item">
+          <div>
+            <span class="trade-side ${t.side}">${t.side}</span>
+            <span style="margin-left: 12px;">${t.amount} BTC</span>
+          </div>
+          <div style="text-align: right;">
+            <div>$${t.entryPrice.toLocaleString()}</div>
+            <span class="trade-status ${t.status}">${t.status}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    function addLog(message) {
+      const logs = document.getElementById('logs');
+      const time = new Date().toLocaleTimeString();
+      logs.innerHTML += `<div>[${time}] ${message}</div>`;
+      logs.scrollTop = logs.scrollHeight;
+    }
+    
+    // Demo
+    renderTrades(demoTrades);
+    document.getElementById('totalTrades').textContent = '3';
+    document.getElementById('winRate').textContent = '67%';
+    document.getElementById('position').innerHTML = '<span class="trade-side LONG">LONG 0.01</span>';
+    document.getElementById('price').textContent = '$42,485';
+    
+    // Simulate live logs
+    setInterval(() => {
+      const messages = [
+        'Checking market conditions...',
+        'RSI: 45.2 | EMA Fast > EMA Slow',
+        'No entry signal. Waiting...',
+        'Price update: $42,485',
+        'Checking open positions...'
+      ];
+      addLog(messages[Math.floor(Math.random() * messages.length)]);
+    }, 3000);
+  </script>
+</body>
+</html>
